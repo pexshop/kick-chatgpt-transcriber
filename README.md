@@ -13,7 +13,7 @@ A Cloudflare Worker backend for transcribing audio recordings with OpenAI, retur
 - Concise summary
 - Bearer-token authentication
 - 24 MB upload limit
-- Health endpoint
+- Health endpoint\n- MCP Streamable HTTP endpoint at `POST /mcp` with the `transcribe_audio` tool
 
 ## Deploy to Cloudflare Workers
 
