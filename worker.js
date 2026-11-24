@@ -45,8 +45,8 @@ function timestamp(seconds) {
 }
 
 async function transcribe(request, env, accessAuthenticated = false) {
-  if (!env.OPENAI_API_KEY || !env.API_TOKEN) {
-    return json({ error: "Server is not configured. Set OPENAI_API_KEY and API_TOKEN secrets." }, 503);
+  if (!env.OPENAI_API_KEY || (!env.API_TOKEN && !accessAuthenticated)) {
+    return json({ error: "Server is not configured. Set OPENAI_API_KEY and configure API_TOKEN or Cloudflare Access." }, 503);
   }
   if (!authorized(request, env, accessAuthenticated)) {
     return json({ error: "Unauthorized" }, 401);
@@ -244,8 +244,8 @@ function decodeBase64(value) {
   return bytes;
 }
 async function handleMcp(request, env, accessAuthenticated = false) {
-  if (!env.OPENAI_API_KEY || !env.API_TOKEN) {
-    return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY and API_TOKEN Worker secrets.");
+  if (!env.OPENAI_API_KEY || (!env.API_TOKEN && !accessAuthenticated)) {
+    return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY and configure API_TOKEN or Cloudflare Access.");
   }
   if (!authorized(request, env, accessAuthenticated)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -314,10 +314,10 @@ async function handleMcp(request, env, accessAuthenticated = false) {
     form.append("translate_to", String(args.translate_to || "zh"));
     const internalRequest = new Request("https://internal/transcribe", {
       method: "POST",
-      headers: { authorization: "Bearer " + env.API_TOKEN },
+      headers: env.API_TOKEN ? { authorization: "Bearer " + env.API_TOKEN } : {},
       body: form
     });
-    const response = await transcribe(internalRequest, env);
+    const response = await transcribe(internalRequest, env, true);
     const result = await response.json();
     if (!response.ok) {
       return mcpResult(id, { isError: true, content: [{ type: "text", text: JSON.stringify(result) }] });
