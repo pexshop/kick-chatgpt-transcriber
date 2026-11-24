@@ -252,7 +252,6 @@ async function handleMcp(request, env, accessAuthenticated = false) {
       status: 401,
       headers: {
         "content-type": "application/json; charset=utf-8",
-        "www-authenticate": 'Bearer realm="kick-chatgpt-transcriber"',
         "cache-control": "no-store"
       }
     });
@@ -268,7 +267,7 @@ async function handleMcp(request, env, accessAuthenticated = false) {
   }
   if (body.method === "initialize") {
     return mcpResult(id, {
-      protocolVersion: body.params?.protocolVersion || "2025-03-26",
+      protocolVersion: "2025-03-26",
       capabilities: { tools: {} },
       serverInfo: { name: "kick-chatgpt-transcriber", version: "1.0.0" },
       instructions: "Use transcribe_audio with a base64-encoded audio file. This server does not fetch Kick VOD URLs."
