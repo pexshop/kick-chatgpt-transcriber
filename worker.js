@@ -29,7 +29,8 @@ function json(data, status = 200, origin = "*") {
   });
 }
 
-function authorized(request, env) {
+function authorized(request, env, accessAuthenticated = false) {
+  if (accessAuthenticated) return true;
   const expected = env.API_TOKEN;
   const supplied = request.headers.get("authorization") || "";
   return Boolean(expected && supplied === `Bearer ${expected}`);
@@ -43,11 +44,11 @@ function timestamp(seconds) {
   return [h, String(m).padStart(2, "0"), s].join(":");
 }
 
-async function transcribe(request, env) {
+async function transcribe(request, env, accessAuthenticated = false) {
   if (!env.OPENAI_API_KEY || !env.API_TOKEN) {
     return json({ error: "Server is not configured. Set OPENAI_API_KEY and API_TOKEN secrets." }, 503);
   }
-  if (!authorized(request, env)) {
+  if (!authorized(request, env, accessAuthenticated)) {
     return json({ error: "Unauthorized" }, 401);
   }
 
@@ -163,7 +164,7 @@ async function transcribe(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const origin = request.headers.get("origin") || "*";
 
@@ -191,7 +192,29 @@ export default {
       return json({ status: "ok" }, 200, origin);
     }
 
-    if (url.pathname === "/mcp" && request.method === "POST") {\n      const response = await handleMcp(request, env);\n      const headers = new Headers(response.headers);\n      headers.set("access-control-allow-origin", origin);\n      headers.set("access-control-allow-headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");\n      headers.set("cache-control", "no-store");\n      return new Response(response.body, { status: response.status, headers });\n    }\n\n    if (url.pathname === "/mcp" && request.method === "GET") {\n      return json({ error: "Use POST for MCP JSON-RPC requests." }, 405, origin);\n    }\n\n    if (url.pathname === "/transcribe" && request.method === "POST") {
+    if (url.pathname === "/mcp" && request.method === "POST") {
+      let accessAuthenticated = false;
+      if (ctx?.access) {
+        try {
+          const identity = await ctx.access.getIdentity();
+          accessAuthenticated = Boolean(identity);
+        } catch {
+          accessAuthenticated = false;
+        }
+      }
+      const response = await handleMcp(request, env, accessAuthenticated);
+      const headers = new Headers(response.headers);
+      headers.set("access-control-allow-origin", origin);
+      headers.set("access-control-allow-headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");
+      headers.set("cache-control", "no-store");
+      return new Response(response.body, { status: response.status, headers });
+    }
+
+    if (url.pathname === "/mcp" && request.method === "GET") {
+      return json({ error: "Use POST for MCP JSON-RPC requests." }, 405, origin);
+    }
+
+    if (url.pathname === "/transcribe" && request.method === "POST") {
       const response = await transcribe(request, env);
       const headers = new Headers(response.headers);
       headers.set("access-control-allow-origin", origin);
@@ -220,12 +243,19 @@ function decodeBase64(value) {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
-async function handleMcp(request, env) {
+async function handleMcp(request, env, accessAuthenticated = false) {
   if (!env.OPENAI_API_KEY || !env.API_TOKEN) {
     return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY and API_TOKEN Worker secrets.");
   }
-  if (!authorized(request, env)) {
-    return mcpError(null, -32001, "Unauthorized. Provide Authorization: Bearer <API_TOKEN>.");
+  if (!authorized(request, env, accessAuthenticated)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "www-authenticate": 'Bearer realm="kick-chatgpt-transcriber"',
+        "cache-control": "no-store"
+      }
+    });
   }
   let body;
   try { body = await request.json(); } catch { return mcpError(null, -32700, "Parse error"); }
