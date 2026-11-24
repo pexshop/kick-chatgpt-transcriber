@@ -81,6 +81,19 @@ Successful response shape:
 
 The Worker is an HTTP backend, not by itself a ChatGPT connector. To make it callable from ChatGPT, connect it through a private plugin/action or an MCP server that exposes the upload workflow. Keep the API token server-side and never expose it in a public client.
 
+## ChatGPT MCP with Cloudflare Managed OAuth
+
+The MCP endpoint is `POST /mcp`. For ChatGPT OAuth sign-in, use Cloudflare Access Managed OAuth rather than exposing the Worker with a static API token.
+
+1. Deploy the latest `worker.js` from this repository to the existing Worker.
+2. In **Workers & Pages → kick-chatgpt-transcriber → Settings/Access**, protect the Worker with a Cloudflare Access application.
+3. In **Zero Trust → Access → Applications**, open that application and enable **Managed OAuth**. Enable Dynamic Client Registration if the ChatGPT client requires it, and allow only the redirect URIs accepted by your ChatGPT connector.
+4. Add an Access policy that permits your account/email to sign in. Access is deny-by-default.
+5. Keep the Worker secrets `OPENAI_API_KEY` and `API_TOKEN` configured. `API_TOKEN` is retained for the internal transcription handler and optional direct API use; requests authenticated by Cloudflare Access are accepted through the Worker Access identity context.
+6. Connect ChatGPT using `https://YOUR-WORKER.workers.dev/mcp` and choose OAuth when prompted.
+
+Cloudflare Managed OAuth is currently a beta feature and must be enabled on the Access application. The Worker source-code change alone does not create or enable that Cloudflare Access application. Do not paste API keys, bearer tokens, or client secrets into ChatGPT messages or URL query strings.
+
 ## Long recordings
 
 The endpoint currently limits each upload to 24 MB. Split longer recordings into smaller files and add each chunk's time offset when combining segment timestamps.
