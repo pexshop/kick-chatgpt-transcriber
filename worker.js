@@ -183,7 +183,7 @@ export default {
       return json({
         name: "Kick ChatGPT Transcriber",
         status: "ok",
-        endpoints: { health: "GET /health", transcribe: "POST /transcribe" }
+        endpoints: { health: "GET /health", transcribe: "POST /transcribe", mcp: "POST /mcp" }
       }, 200, origin);
     }
 
@@ -191,7 +191,7 @@ export default {
       return json({ status: "ok" }, 200, origin);
     }
 
-    if (url.pathname === "/transcribe" && request.method === "POST") {
+    if (url.pathname === "/mcp" && request.method === "POST") {\n      const response = await handleMcp(request, env);\n      const headers = new Headers(response.headers);\n      headers.set("access-control-allow-origin", origin);\n      headers.set("access-control-allow-headers", "authorization, content-type, mcp-session-id, mcp-protocol-version");\n      headers.set("cache-control", "no-store");\n      return new Response(response.body, { status: response.status, headers });\n    }\n\n    if (url.pathname === "/mcp" && request.method === "GET") {\n      return json({ error: "Use POST for MCP JSON-RPC requests." }, 405, origin);\n    }\n\n    if (url.pathname === "/transcribe" && request.method === "POST") {
       const response = await transcribe(request, env);
       const headers = new Headers(response.headers);
       headers.set("access-control-allow-origin", origin);
@@ -201,3 +201,98 @@ export default {
     return json({ error: "Not found" }, 404, origin);
   }
 };
+
+
+/**
+ * MCP Streamable HTTP endpoint
+ * POST /mcp with JSON-RPC messages. Audio is supplied as base64 in the tool call.
+ */
+function mcpResult(id, result) {
+  return json({ jsonrpc: "2.0", id, result });
+}
+function mcpError(id, code, message, data) {
+  return json({ jsonrpc: "2.0", id, error: { code, message, ...(data === undefined ? {} : { data }) } }, 200);
+}
+function decodeBase64(value) {
+  const clean = value.replace(/^data:[^,]+,/, "").replace(/\s/g, "");
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+async function handleMcp(request, env) {
+  if (!env.OPENAI_API_KEY || !env.API_TOKEN) {
+    return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY and API_TOKEN Worker secrets.");
+  }
+  if (!authorized(request, env)) {
+    return mcpError(null, -32001, "Unauthorized. Provide Authorization: Bearer <API_TOKEN>.");
+  }
+  let body;
+  try { body = await request.json(); } catch { return mcpError(null, -32700, "Parse error"); }
+  if (!body || body.jsonrpc !== "2.0" || typeof body.method !== "string") {
+    return mcpError(body?.id ?? null, -32600, "Invalid Request");
+  }
+  const id = body.id;
+  if (body.method === "notifications/initialized" || body.method === "notifications/cancelled") {
+    return new Response(null, { status: 202 });
+  }
+  if (body.method === "initialize") {
+    return mcpResult(id, {
+      protocolVersion: body.params?.protocolVersion || "2025-03-26",
+      capabilities: { tools: {} },
+      serverInfo: { name: "kick-chatgpt-transcriber", version: "1.0.0" },
+      instructions: "Use transcribe_audio with a base64-encoded audio file. This server does not fetch Kick VOD URLs."
+    });
+  }
+  if (body.method === "ping") return mcpResult(id, {});
+  if (body.method === "tools/list") {
+    return mcpResult(id, { tools: [{
+      name: "transcribe_audio",
+      description: "Transcribe an audio file, return timestamped segments, translate it (Chinese by default), and summarize it. Provide the audio bytes as base64. Maximum 24 MB decoded. Does not download Kick VOD URLs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file_base64: { type: "string", description: "Base64-encoded audio file bytes (not a URL)." },
+          filename: { type: "string", description: "Filename including extension, e.g. stream.mp3." },
+          mime_type: { type: "string", description: "Audio MIME type, e.g. audio/mpeg." },
+          language: { type: "string", description: "Optional source language code, e.g. en." },
+          translate_to: { type: "string", description: "Target language code; defaults to zh." }
+        },
+        required: ["file_base64", "filename"]
+      }
+    }] });
+  }
+  if (body.method === "tools/call") {
+    const name = body.params?.name;
+    if (name !== "transcribe_audio") {
+      return mcpError(id, -32602, "Unknown tool: " + String(name));
+    }
+    const args = body.params?.arguments || {};
+    if (typeof args.file_base64 !== "string" || typeof args.filename !== "string") {
+      return mcpResult(id, { isError: true, content: [{ type: "text", text: "file_base64 and filename are required." }] });
+    }
+    let bytes;
+    try { bytes = decodeBase64(args.file_base64); } catch {
+      return mcpResult(id, { isError: true, content: [{ type: "text", text: "file_base64 is not valid base64." }] });
+    }
+    if (!bytes.byteLength || bytes.byteLength > MAX_AUDIO_BYTES) {
+      return mcpResult(id, { isError: true, content: [{ type: "text", text: "Audio must be between 1 byte and 24 MB." }] });
+    }
+    const form = new FormData();
+    form.append("file", new File([bytes], args.filename, { type: args.mime_type || "application/octet-stream" }));
+    if (args.language) form.append("language", String(args.language));
+    form.append("translate_to", String(args.translate_to || "zh"));
+    const internalRequest = new Request("https://internal/transcribe", {
+      method: "POST",
+      headers: { authorization: "Bearer " + env.API_TOKEN },
+      body: form
+    });
+    const response = await transcribe(internalRequest, env);
+    const result = await response.json();
+    if (!response.ok) {
+      return mcpResult(id, { isError: true, content: [{ type: "text", text: JSON.stringify(result) }] });
+    }
+    return mcpResult(id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
+  }
+  return mcpError(id, -32601, "Method not found");
+}
