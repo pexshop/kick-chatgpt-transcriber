@@ -116,3 +116,49 @@ test("OPTIONS returns CORS preflight response", async () => {
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("access-control-allow-methods"), "GET, POST, OPTIONS");
 });
+
+test("Cloudflare Access identity can authenticate MCP without API_TOKEN", async () => {
+  const request = new Request("https://worker.test/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 10, method: "initialize" })
+  });
+  const response = await worker.fetch(request, { OPENAI_API_KEY: "test-openai-key" }, {
+    access: { getIdentity: async () => ({ email: "tester@example.com" }) }
+  });
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.result.serverInfo.name, "kick-chatgpt-transcriber");
+});
+
+test("MCP rejects an incorrect bearer token", async () => {
+  const response = await call("/mcp", {
+    method: "POST",
+    body: { jsonrpc: "2.0", id: 11, method: "initialize" },
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer incorrect-token"
+    }
+  });
+  assert.equal(response.status, 401);
+});
+
+test("transcribe_audio reports invalid base64 without calling OpenAI", async () => {
+  const response = await call("/mcp", {
+    method: "POST",
+    body: {
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: { name: "transcribe_audio", arguments: { file_base64: "%%%not-base64%%%", filename: "test.mp3" } }
+    },
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer test-api-token"
+    }
+  });
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.result.isError, true);
+  assert.match(data.result.content[0].text, /valid base64/i);
+});
