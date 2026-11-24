@@ -21,7 +21,7 @@ A Cloudflare Worker backend for transcribing audio recordings with OpenAI, retur
 2. Create a Worker and paste the contents of `worker.js`, or deploy this project with Wrangler.
 3. In Worker **Settings → Variables and Secrets**, add these as **Secrets**:
    - `OPENAI_API_KEY`: your OpenAI API key
-   - `API_TOKEN`: a long, random token that your client will send
+   - `API_TOKEN`: optional fallback bearer token for direct API use. Cloudflare Access-authenticated MCP requests do not need this secret.
 4. Deploy the Worker.
 5. Test `GET https://YOUR-WORKER.workers.dev/health`.
 
@@ -83,16 +83,16 @@ The Worker is an HTTP backend, not by itself a ChatGPT connector. To make it cal
 
 ## ChatGPT MCP with Cloudflare Managed OAuth
 
-The MCP endpoint is `POST /mcp`. For ChatGPT OAuth sign-in, use Cloudflare Access Managed OAuth rather than exposing the Worker with a static API token.
+The MCP endpoint is `POST /mcp`. For ChatGPT OAuth sign-in, protect the Worker with Cloudflare Access Managed OAuth. Access performs the OAuth authorization-code/PKCE flow; the Worker verifies the authenticated invocation using Cloudflare Workers `ctx.access`.
 
 1. Deploy the latest `worker.js` from this repository to the existing Worker.
 2. In **Workers & Pages → kick-chatgpt-transcriber → Settings/Access**, protect the Worker with a Cloudflare Access application.
-3. In **Zero Trust → Access → Applications**, open that application and enable **Managed OAuth**. Enable Dynamic Client Registration if the ChatGPT client requires it, and allow only the redirect URIs accepted by your ChatGPT connector.
+3. In **Zero Trust → Access controls → Applications**, edit the application that protects this Worker. Under **Advanced settings**, enable **Managed OAuth** and save. Managed OAuth is Cloudflare’s OAuth authorization service; do not create OAuth endpoints inside this Worker.
 4. Add an Access policy that permits your account/email to sign in. Access is deny-by-default.
-5. Keep the Worker secrets `OPENAI_API_KEY` and `API_TOKEN` configured. `API_TOKEN` is retained for the internal transcription handler and optional direct API use; requests authenticated by Cloudflare Access are accepted through the Worker Access identity context.
-6. Connect ChatGPT using `https://YOUR-WORKER.workers.dev/mcp` and choose OAuth when prompted.
+5. Keep `OPENAI_API_KEY` configured as a Worker Secret. `API_TOKEN` is optional when using Cloudflare Access; if present, it remains available for direct Bearer-token API calls. Access-authenticated MCP calls are checked with `ctx.access.getIdentity()`.
+6. Connect ChatGPT using `https://YOUR-WORKER.workers.dev/mcp` and choose OAuth when prompted. Cloudflare Access should return the OAuth discovery challenge before the request reaches the Worker.
 
-Cloudflare Managed OAuth is currently a beta feature and must be enabled on the Access application. The Worker source-code change alone does not create or enable that Cloudflare Access application. Do not paste API keys, bearer tokens, or client secrets into ChatGPT messages or URL query strings.
+Cloudflare Managed OAuth availability and plan requirements are controlled by Cloudflare. The Worker source-code change alone does not enable Access or Managed OAuth: both must be enabled in the Cloudflare dashboard. When Access is not enabled, the Worker only accepts a configured `API_TOKEN`. Do not paste API keys, bearer tokens, or client secrets into ChatGPT messages or URL query strings.
 
 ## Long recordings
 
@@ -101,3 +101,14 @@ The endpoint currently limits each upload to 24 MB. Split longer recordings into
 ## Development
 
 The Worker uses the Cloudflare Workers runtime and native `fetch`, `FormData`, and `File`; no npm dependencies are required.
+
+## Automated checks
+
+Run the syntax check and regression tests with Node.js 20 or later:
+
+```sh
+node --check worker.js
+npm test
+```
+
+GitHub Actions runs these checks on pushes to `main` and pull requests.
