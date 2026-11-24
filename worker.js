@@ -45,11 +45,11 @@ function timestamp(seconds) {
 }
 
 async function transcribe(request, env, accessAuthenticated = false) {
-  if (!env.OPENAI_API_KEY || (!env.API_TOKEN && !accessAuthenticated)) {
-    return json({ error: "Server is not configured. Set OPENAI_API_KEY and configure API_TOKEN or Cloudflare Access." }, 503);
-  }
   if (!authorized(request, env, accessAuthenticated)) {
     return json({ error: "Unauthorized" }, 401);
+  }
+  if (!env.OPENAI_API_KEY) {
+    return json({ error: "Server is not configured. Set OPENAI_API_KEY as a Worker Secret." }, 503);
   }
 
   let form;
@@ -244,9 +244,6 @@ function decodeBase64(value) {
   return bytes;
 }
 async function handleMcp(request, env, accessAuthenticated = false) {
-  if (!env.OPENAI_API_KEY || (!env.API_TOKEN && !accessAuthenticated)) {
-    return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY and configure API_TOKEN or Cloudflare Access.");
-  }
   if (!authorized(request, env, accessAuthenticated)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
@@ -255,6 +252,9 @@ async function handleMcp(request, env, accessAuthenticated = false) {
         "cache-control": "no-store"
       }
     });
+  }
+  if (!env.OPENAI_API_KEY) {
+    return mcpError(null, -32603, "Server is not configured. Set OPENAI_API_KEY as a Worker Secret.");
   }
   let body;
   try { body = await request.json(); } catch { return mcpError(null, -32700, "Parse error"); }
